@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import asyncio
 
 import click
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -108,7 +109,8 @@ def run(log_dir, cookies_dir, token_config_path, monitoring_config_path, interva
     _setup_logger('telegram', os.path.join(log_dir, 'telegram'))
     _setup_logger('cqhttp', os.path.join(log_dir, 'cqhttp'))
     _setup_logger('discord', os.path.join(log_dir, 'discord'))
-    TelegramNotifier.init(token=telegram_bot_token, logger_name='telegram')
+
+    asyncio.run(TelegramNotifier.init(token=telegram_bot_token, logger_name='telegram'))
     CqhttpNotifier.init(token=token_config.get('cqhttp_access_token', ''), logger_name='cqhttp')
     DiscordNotifier.init(logger_name='discord')
 
@@ -134,7 +136,6 @@ def run(log_dir, cookies_dir, token_config_path, monitoring_config_path, interva
     scheduler.add_job(GraphqlAPI.update_api_data, trigger='cron', hour='*')
 
     if monitoring_config['maintainer_chat_id']:
-        # maintainer_chat_id should be telegram chat id.
         maintainer_chat_id = monitoring_config['maintainer_chat_id']
         twitter_watcher = TwitterWatcher(twitter_auth_username_list, cookies_dir)
         _send_summary(maintainer_chat_id, monitors, twitter_watcher)
@@ -152,16 +153,17 @@ def run(log_dir, cookies_dir, token_config_path, monitoring_config_path, interva
                               hour='6',
                               args=[maintainer_chat_id, monitors, twitter_watcher])
         if confirm:
-            if not TelegramNotifier.confirm(
-                    TelegramMessage(chat_id_list=[maintainer_chat_id],
-                                    text='Please confirm the initialization information')):
+            confirmed = asyncio.run(TelegramNotifier.confirm(
+                TelegramMessage(chat_id_list=[maintainer_chat_id],
+                                text='Please confirm the initialization information')))
+            if not confirmed:
                 TelegramNotifier.put_message_into_queue(
                     TelegramMessage(chat_id_list=[maintainer_chat_id], text='Monitor will exit now.'))
                 raise RuntimeError('Initialization information confirm error')
             TelegramNotifier.put_message_into_queue(
                 TelegramMessage(chat_id_list=[maintainer_chat_id], text='Monitor initialization succeeded.'))
         if listen_exit_command:
-            TelegramNotifier.listen_exit_command(maintainer_chat_id)
+            asyncio.run(TelegramNotifier.listen_exit_command(maintainer_chat_id))
 
     scheduler.start()
 
@@ -182,23 +184,47 @@ def check_tokens(cookies_dir, token_config_path, telegram_chat_id, test_username
     result = json.dumps(twitter_watcher.check_tokens(test_username, output_response), indent=4)
     print(result)
     if telegram_chat_id:
-        TelegramNotifier.init(telegram_bot_token, '')
-        TelegramNotifier.send_message(TelegramMessage(chat_id_list=[telegram_chat_id], text=result))
+        asyncio.run(TelegramNotifier.init(telegram_bot_token, ''))
+        asyncio.run(TelegramNotifier.send_message(TelegramMessage(chat_id_list=[telegram_chat_id], text=result)))
 
 
 @cli.command(context_settings={'show_default': True})
 @click.option('--cookies_dir', default=os.path.join(sys.path[0], 'cookies'))
 @click.option('--username', required=True)
 @click.option('--password', required=True)
-@click.option('--confirmation_code', required=False, default=None)
-def generate_auth_cookie(cookies_dir, username, password, confirmation_code):
+def generate_auth_cookie(cookies_dir, username, password):
+    from playwright.sync_api import sync_playwright
+
     os.makedirs(cookies_dir, exist_ok=True)
-    client = login(username=username, password=password, confirmation_code=confirmation_code)
-    cookies = client.cookies
-    dump_path = os.path.join(cookies_dir, '{}.json'.format(username))
-    with open(dump_path, 'w') as f:
-        f.write(json.dumps(dict(cookies), indent=2))
-    print('Saved to {}'.format(dump_path))
+    dump_path = os.path.join(cookies_dir, f"{username}.json")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context()
+        page = context.new_page()
+
+        page.goto("https://twitter.com/i/flow/login", timeout=60000)
+
+        page.wait_for_selector('input[name="text"]', timeout=30000)
+        page.fill('input[name="text"]', username)
+        page.keyboard.press("Enter")
+
+        page.wait_for_selector('input[name="password"]', timeout=300000)
+        page.fill('input[name="password"]', password)
+        page.keyboard.press("Enter")
+
+        try:
+            page.wait_for_url("https://x.com/home", timeout=20000)
+            print("✅ Login successful.")
+        except:
+            print("⚠️ Login might have failed or needs 2FA.")
+
+        cookies = context.cookies()
+        with open(dump_path, "w") as f:
+            json.dump(cookies, f, indent=2)
+
+        print(f"✅ Cookies saved to: {dump_path}")
+        browser.close()
 
 
 if __name__ == '__main__':
