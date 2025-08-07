@@ -111,8 +111,8 @@ def run(log_dir, cookies_dir, token_config_path, monitoring_config_path, interva
     _setup_logger('discord', os.path.join(log_dir, 'discord'))
 
     asyncio.run(TelegramNotifier.init(token=telegram_bot_token, logger_name='telegram'))
-    CqhttpNotifier.init(token=token_config.get('cqhttp_access_token', ''), logger_name='cqhttp')
-    DiscordNotifier.init(logger_name='discord')
+    asyncio.run(CqhttpNotifier.init(token=token_config.get('cqhttp_access_token', ''), logger_name='cqhttp'))
+    asyncio.run(DiscordNotifier.init(logger_name='discord'))
 
     monitors = dict()
     for monitor_cls in CONFIG_FIELD_TO_MONITOR.values():

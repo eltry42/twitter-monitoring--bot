@@ -1,18 +1,18 @@
-import queue
-import threading
+import asyncio
 from abc import ABC, abstractmethod
-from typing import List, Union
+from typing import List, Union, Optional
 
 from status_tracker import StatusTracker
 from utils import check_initialized
 
 
 class Message:
-
-    def __init__(self,
-                 text: str,
-                 photo_url_list: Union[List[str], None] = None,
-                 video_url_list: Union[List[str], None] = None):
+    def __init__(
+        self,
+        text: str,
+        photo_url_list: Optional[List[str]] = None,
+        video_url_list: Optional[List[str]] = None,
+    ):
         self.text = text
         self.photo_url_list = photo_url_list
         self.video_url_list = video_url_list
@@ -20,43 +20,38 @@ class Message:
 
 class NotifierBase(ABC):
     initialized = False
+    message_queue: asyncio.Queue = asyncio.Queue()
+    logger = None  # Optional[logging.Logger]
 
-    def __new__(self):
+    def __new__(cls):
         raise Exception('Do not instantiate this class!')
 
     @classmethod
-    @abstractmethod
-    def init(cls):
-        cls.message_queue = queue.SimpleQueue()
+    async def init(cls):
         StatusTracker.set_notifier_status(cls.notifier_name, True)
         cls.initialized = True
-        cls.work_start()
+        asyncio.create_task(cls._work())
 
     @classmethod
     @abstractmethod
-    @check_initialized
-    def send_message(cls, message: Message):
+    async def send_message(cls, message: Message):
         pass
 
     @classmethod
     @check_initialized
-    def _work(cls):
+    async def _work(cls):
         while True:
-            message = cls.message_queue.get()
+            message = await cls.message_queue.get()
             try:
                 StatusTracker.set_notifier_status(cls.notifier_name, False)
-                cls.send_message(message)
+                await cls.send_message(message)
                 StatusTracker.set_notifier_status(cls.notifier_name, True)
             except Exception as e:
                 print(e)
-                cls.logger.error(e)
-
-    @classmethod
-    @check_initialized
-    def work_start(cls):
-        threading.Thread(target=cls._work, daemon=True).start()
+                if cls.logger:
+                    cls.logger.error(e)
 
     @classmethod
     @check_initialized
     def put_message_into_queue(cls, message: Message):
-        cls.message_queue.put(message)
+        cls.message_queue.put_nowait(message)

@@ -40,7 +40,7 @@ class TelegramNotifier(NotifierBase):
         cls.update_offset = updates[-1].update_id + 1 if updates else None
         cls.logger.info("Init telegram notifier succeed.")
         cls.initialized = True
-        super().init()
+        await super().init()
 
     @classmethod
     async def _retry(cls, func, *args, tries=5, delay=5, **kwargs):
